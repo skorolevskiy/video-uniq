@@ -18,11 +18,13 @@ import hashlib
 class VideoUniquifier:
     """Main class for generating unique video variations"""
     
-    def __init__(self, input_video: str, output_dir: str = "output", num_variations: int = 10):
+    def __init__(self, input_video: str, output_dir: str = "output", num_variations: int = 10, max_concurrent: int = 3):
         self.input_video = Path(input_video)
         self.output_dir = Path(output_dir)
         self.num_variations = num_variations
+        self.max_concurrent = max_concurrent
         self.variations_log = []
+        self.semaphore = asyncio.Semaphore(max_concurrent)
         
         # Validate input
         if not self.input_video.exists():
@@ -75,14 +77,14 @@ class VideoUniquifier:
     def _generate_random_params(self) -> Dict:
         """Generate random parameters for video manipulation"""
         
-        # Speed adjustment (0.99x to 1.01x)
-        speed_factor = random.uniform(0.99, 1.01)
+        # Speed adjustment (0.98x to 1.02x)
+        speed_factor = random.uniform(0.98, 1.02)
         
         # Color adjustments (subtle changes)
-        brightness = random.uniform(-0.02, 0.02)  # -0.02 to +0.02
-        contrast = random.uniform(0.98, 1.02)     # 0.98 to 1.02
-        saturation = random.uniform(0.98, 1.02)   # 0.98 to 1.02
-        gamma = random.uniform(0.98, 1.02)        # 0.98 to 1.02
+        brightness = random.uniform(-0.03, 0.03)  # -0.03 to +0.03
+        contrast = random.uniform(0.97, 1.03)     # 0.97 to 1.03
+        saturation = random.uniform(0.97, 1.03)   # 0.97 to 1.03
+        gamma = random.uniform(0.97, 1.03)        # 0.97 to 1.03
         
         # Crop parameters (1-3% zoom)
         crop_percent = random.uniform(0.01, 0.03)
@@ -239,21 +241,10 @@ class VideoUniquifier:
         
         return cmd
     
-    async def generate_variations(self):
-        """Generate all video variations"""
-        
-        if self.video_info is None:
-            self.video_info = await self._get_video_info()
-        
-        print(f"🎬 Starting generation of {self.num_variations} variations...")
-        print(f"📹 Input: {self.input_video.name}")
-        print(f"📊 Resolution: {self.video_info['width']}x{self.video_info['height']}")
-        print(f"⏱️  Duration: {self.video_info['duration']:.2f}s")
-        print(f"🔊 Audio: {'Yes' if self.video_info['has_audio'] else 'No'}")
-        print(f"📁 Output directory: {self.output_dir}\n")
-        
-        for i in range(1, self.num_variations + 1):
-            print(f"[{i}/{self.num_variations}] Generating variation {i}...")
+    async def _generate_single_variation(self, i: int):
+        """Generate a single video variation"""
+        async with self.semaphore:
+            print(f"[{i}/{self.num_variations}] Starting variation {i}...")
             
             # Generate random parameters
             params = self._generate_random_params()
@@ -301,7 +292,7 @@ class VideoUniquifier:
                 
                 self.variations_log.append(variation_log)
                 
-                print(f"   ✅ Created: {output_filename}")
+                print(f"   ✅ Finished variation {i}: {output_filename}")
                 print(f"   📊 Hash: {file_hash[:16]}...")
                 print(f"   ⚡ Speed: {params['speed_factor']:.4f}x")
                 print(f"   🎨 Brightness: {params['brightness']:+.4f}, Contrast: {params['contrast']:.4f}")
@@ -311,7 +302,23 @@ class VideoUniquifier:
                 
             except subprocess.CalledProcessError as e:
                 print(f"   ❌ Error generating variation {i}: {e}")
-                continue
+
+    async def generate_variations(self):
+        """Generate all video variations"""
+        
+        if self.video_info is None:
+            self.video_info = await self._get_video_info()
+        
+        print(f"🎬 Starting generation of {self.num_variations} variations...")
+        print(f"📹 Input: {self.input_video.name}")
+        print(f"📊 Resolution: {self.video_info['width']}x{self.video_info['height']}")
+        print(f"⏱️  Duration: {self.video_info['duration']:.2f}s")
+        print(f"🔊 Audio: {'Yes' if self.video_info['has_audio'] else 'No'}")
+        print(f"📁 Output directory: {self.output_dir}")
+        print(f"🚀 Parallel execution: {self.max_concurrent} concurrent tasks\n")
+        
+        tasks = [self._generate_single_variation(i) for i in range(1, self.num_variations + 1)]
+        await asyncio.gather(*tasks)
         
         # Save log file
         self._save_log()
@@ -366,6 +373,12 @@ def main():
         default=10,
         help='Number of variations to generate (default: 10)'
     )
+    parser.add_argument(
+        '-c', '--concurrent',
+        type=int,
+        default=3,
+        help='Number of concurrent tasks (default: 3)'
+    )
     
     args = parser.parse_args()
     
@@ -373,7 +386,8 @@ def main():
         uniquifier = VideoUniquifier(
             input_video=args.input,
             output_dir=args.output,
-            num_variations=args.num_variations
+            num_variations=args.num_variations,
+            max_concurrent=args.concurrent
         )
         asyncio.run(uniquifier.generate_variations())
         
