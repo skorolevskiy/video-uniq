@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: video-uniquifier
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python fastapi_server.py"
+    envVars:
+      - key: PORT
+        value: 8000
