@@ -15,8 +15,7 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY api_server.py .
+COPY fastapi_server.py .
 COPY video_uniquifier.py .
 
 # Create necessary directories
@@ -25,5 +24,4 @@ RUN mkdir -p /app/uploads /app/outputs
 # Expose port
 EXPOSE 10000
 
-# Run the application
-CMD ["python", "api_server.py"]
+CMD ["uvicorn", "fastapi_server:app", "--host", "0.0.0.0", "--port", "10000"]

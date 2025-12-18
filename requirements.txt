@@ -1,16 +1,12 @@
 # Core dependencies for video processing
 ffmpeg-python==0.2.0
 
-# Web framework (Flask - more stable on Render)
-flask==3.1.0
-werkzeug==3.0.3
+# Web framework (FastAPI - modern async framework)
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
 
 # File handling
 python-multipart==0.0.9
 
-# CORS support
-flask-cors==4.0.0
-
-# For background job processing
-celery==5.3.4
-redis==5.0.1
+# For async operations
+aiofiles==24.1.0
