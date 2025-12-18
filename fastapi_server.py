@@ -8,9 +8,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import uuid
+import asyncio
 from pathlib import Path
 import shutil
 import zipfile
+import aiofiles
 from video_uniquifier import VideoUniquifier
 
 app = FastAPI(
@@ -47,7 +49,19 @@ class JobInfo(BaseModel):
     num_variations: Optional[int] = None
 
 
-def process_video_task(job_id: str, input_path: str, output_dir: str, num_variations: int):
+def create_zip_file(output_dir: str, job_id: str) -> Path:
+    """Create a zip file from the output directory"""
+    zip_path = Path(output_dir) / f'variations_{job_id}.zip'
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for file in Path(output_dir).glob('*.mp4'):
+            zipf.write(file, file.name)
+        log_file = Path(output_dir) / 'variations_log.json'
+        if log_file.exists():
+            zipf.write(log_file, log_file.name)
+    return zip_path
+
+
+async def process_video_task(job_id: str, input_path: str, output_dir: str, num_variations: int):
     """Background task for video processing"""
     try:
         jobs[job_id]['status'] = 'processing'
@@ -57,16 +71,11 @@ def process_video_task(job_id: str, input_path: str, output_dir: str, num_variat
             output_dir=output_dir,
             num_variations=num_variations
         )
-        uniquifier.generate_variations()
+        await uniquifier.generate_variations()
         
         # Create zip file
-        zip_path = Path(output_dir) / f'variations_{job_id}.zip'
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for file in Path(output_dir).glob('*.mp4'):
-                zipf.write(file, file.name)
-            log_file = Path(output_dir) / 'variations_log.json'
-            if log_file.exists():
-                zipf.write(log_file, log_file.name)
+        loop = asyncio.get_running_loop()
+        zip_path = await loop.run_in_executor(None, create_zip_file, output_dir, job_id)
         
         jobs[job_id]['status'] = 'completed'
         jobs[job_id]['zip_file'] = str(zip_path)
@@ -127,8 +136,9 @@ async def upload_video(
     
     # Save uploaded file
     input_path = UPLOAD_FOLDER / f"{job_id}_{video.filename}"
-    with open(input_path, "wb") as buffer:
-        shutil.copyfileobj(video.file, buffer)
+    async with aiofiles.open(input_path, 'wb') as out_file:
+        while content := await video.read(1024 * 1024):  # Read in 1MB chunks
+            await out_file.write(content)
     
     # Create output directory
     output_dir = OUTPUT_FOLDER / job_id
@@ -211,22 +221,27 @@ def list_jobs():
     return jobs_list
 
 
+def _cleanup_files(job_id: str):
+    # Remove output directory
+    output_dir = OUTPUT_FOLDER / job_id
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    
+    # Remove uploaded file
+    for file in UPLOAD_FOLDER.glob(f"{job_id}_*"):
+        file.unlink()
+
+
 @app.delete("/api/cleanup/{job_id}")
-def cleanup_job(job_id: str):
+async def cleanup_job(job_id: str):
     """Delete job files and cleanup resources"""
     
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
     try:
-        # Remove output directory
-        output_dir = OUTPUT_FOLDER / job_id
-        if output_dir.exists():
-            shutil.rmtree(output_dir)
-        
-        # Remove uploaded file
-        for file in UPLOAD_FOLDER.glob(f"{job_id}_*"):
-            file.unlink()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _cleanup_files, job_id)
         
         # Remove from jobs dict
         del jobs[job_id]

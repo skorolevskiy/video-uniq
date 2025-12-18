@@ -7,6 +7,7 @@ to bypass content duplication algorithms while maintaining visual quality.
 import os
 import json
 import random
+import asyncio
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,10 +31,10 @@ class VideoUniquifier:
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Get input video properties
-        self.video_info = self._get_video_info()
+        # Video info will be loaded asynchronously
+        self.video_info = None
         
-    def _get_video_info(self) -> Dict:
+    async def _get_video_info(self) -> Dict:
         """Extract video metadata using ffprobe"""
         cmd = [
             'ffprobe',
@@ -45,8 +46,17 @@ class VideoUniquifier:
         ]
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            data = json.loads(result.stdout)
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                raise Exception(f"ffprobe failed: {stderr.decode()}")
+
+            data = json.loads(stdout.decode())
             
             video_stream = next((s for s in data['streams'] if s['codec_type'] == 'video'), None)
             audio_stream = next((s for s in data['streams'] if s['codec_type'] == 'audio'), None)
@@ -229,8 +239,11 @@ class VideoUniquifier:
         
         return cmd
     
-    def generate_variations(self):
+    async def generate_variations(self):
         """Generate all video variations"""
+        
+        if self.video_info is None:
+            self.video_info = await self._get_video_info()
         
         print(f"🎬 Starting generation of {self.num_variations} variations...")
         print(f"📹 Input: {self.input_video.name}")
@@ -254,15 +267,19 @@ class VideoUniquifier:
             
             # Execute FFmpeg
             try:
-                subprocess.run(
-                    cmd,
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    raise subprocess.CalledProcessError(process.returncode, cmd, output=stdout, stderr=stderr)
                 
                 # Calculate file hash
-                file_hash = self._calculate_file_hash(output_path)
+                loop = asyncio.get_running_loop()
+                file_hash = await loop.run_in_executor(None, self._calculate_file_hash, output_path)
                 
                 # Log parameters
                 variation_log = {
@@ -358,7 +375,7 @@ def main():
             output_dir=args.output,
             num_variations=args.num_variations
         )
-        uniquifier.generate_variations()
+        asyncio.run(uniquifier.generate_variations())
         
     except Exception as e:
         print(f"❌ Error: {e}")
